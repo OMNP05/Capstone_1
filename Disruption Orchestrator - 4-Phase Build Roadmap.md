@@ -13,15 +13,15 @@ Companion to `Disruption Orchestrator - Architecture & Build Plan.md`. That doc 
 | MCP Gateway + 6 standalone MCP servers (network boundary, FastMCP) | Plain Python modules/functions inside the one FastAPI app, with the **same function names and input/output shapes** the MCP tools will have later. Promoting a module to a real MCP server later is a copy-paste, not a redesign. |
 | LangGraph state machine | A single Python function per disruption that calls Detection → Impact → Recovery → (approve) → Coordination → Comms in order, writing `disruptions.state` after each step. It's a state machine, just not a graph library yet. |
 | Redis (cache + event stream) | Nothing. Postgres is small enough; the frontend polls. |
-| SSE / WebSocket live push | Frontend polls `GET /disruptions` every few seconds. |
+| SSE / WebSocket live push | Streamlit can't consume a persistent push connection anyway — it reruns the script on demand. So "realtime" here always means *polling the FastAPI backend from Streamlit*, manually at first, then automatically. See each phase below. |
 | JWT + RBAC (`controller`/`approver`/`admin`) | No login wall. One implicit "ops" role for everyone. |
 | HMAC approval tokens, 15-min TTL | A `pending` boolean + an `approved_by` text field on the disruption row. |
 | 6 MCP servers across weather / flightops / aodb / pss / crew / notify | Same 6 **logical** domains, just as service modules, not servers. |
-| Multiple frontend stacks / separate dashboards for controller vs approver vs passenger | One Next.js app, one page style, everything on it. No separate passenger UI — passenger comms are just rows in a table (plus optional real email/Telegram once keys exist). |
+| Multiple frontend stacks / separate dashboards for controller vs approver vs passenger | One Streamlit app, one page style, everything on it. No separate passenger UI — passenger comms are just rows in a table (plus optional real email/Telegram once keys exist). |
 
 Tech stack for the **entire project**, all 4 phases — this does not change phase to phase, only what's wired up changes:
 
-- **Frontend:** Next.js + Tailwind (plain fetch/polling in Phase 1-2, nothing fancier)
+- **Frontend:** Streamlit — one multi-page Python app for the whole project (controller view, approval inbox, demo trigger, all of it). Pure Python, no separate JS build or deploy step, talks to FastAPI via `requests`/`httpx`.
 - **Backend:** Python FastAPI (monolith through Phase 1-2; splits into gateway + servers in Phase 3)
 - **DB:** Postgres on **Neon** (free tier) — the only datastore until Phase 3
 - **LLM:** Claude API (Sonnet for agent reasoning, Haiku for comms drafts once that stage is wired)
@@ -46,7 +46,7 @@ Tech stack for the **entire project**, all 4 phases — this does not change pha
 - State machine (manual, in code): `DETECTED → ASSESSED → PLANNED → PENDING_APPROVAL → APPROVED → EXECUTING → COMPLETED`. Enforced with simple `if` guards, not a library.
 - HITL: dead simple. One button in the UI: **Approve** / **Reject**. No token, no HMAC, no TTL — just sets `disruptions.pending = false, approved_by = 'demo-user'` and lets the orchestrator continue.
 - One API route group: `GET /disruptions`, `GET /disruptions/{id}`, `POST /disruptions/{id}/approve`, `POST /disruptions/{id}/reject`, `POST /demo/inject` (triggers the one seeded scenario), `GET /health`.
-- One Next.js page: a table of disruptions + a detail view with impact numbers, recovery options, an approve/reject button, and the notification text that got drafted. **Polling only** (refetch every 5s), no SSE.
+- One Streamlit app (`streamlit run app.py`): `st.dataframe` table of disruptions + a detail section (select a disruption → see impact numbers, recovery options, an Approve/Reject button, and the drafted notification text). A manual **"🔄 Refresh" button** calls the API again — no auto-polling yet, keep Phase 1 dead simple.
 - **One demo scenario only:** Fog at DEL (a weather-driven delay). Hard-code it well, make it reliable, don't try to support all four scenarios yet.
 - No auth, no RBAC, no roles.
 
@@ -79,7 +79,7 @@ Click "Inject Fog at DEL" → a disruption appears → impact numbers show up �
 - **Remaining 3 demo scenarios**, generalizing Detection/Impact/Recovery so they're not hard-coded to fog: AOG on a tail, crew timeout (FTL breach), hub congestion. `/demo/inject` takes a `scenario` param for all four.
 - **Audit log** — add the `audit_log` table; every agent call and state transition writes a row (what tool/function, inputs, outputs, timestamp). Still just a Postgres table, nothing fancier.
 - **Full data model** from the architecture doc: add `gates`, `crew_assignments`, `segments`, `approvals`, `actions` so the schema matches section 11 of the architecture doc properly instead of the trimmed Phase 1 version.
-- **SSE for live updates** (`GET /stream`) replacing polling — this is the first "real-time" piece, and it's cheap to add once the REST shape is stable.
+- **Auto-refresh** — drop in the `streamlit-autorefresh` component so the app re-queries the API every few seconds on its own, replacing Phase 1's manual Refresh button. Streamlit has no persistent-connection push model, so this is still polling under the hood — just automatic instead of manual. (The backend can still expose `GET /stream` from the architecture doc for parity / any future non-Streamlit consumer, but the Streamlit frontend itself never calls it.)
 - **Basic auth + RBAC** — simple JWT login (`controller`, `approver`, `admin`), gating the approve/reject and audit routes. Still no Supabase Auth, just FastAPI + `python-jose`.
 - **Proper HITL rule** from the architecture doc (section 8): auto-approve low-risk options, require explicit approval when a flight is cancelled, pax_impacted > 100, cost > threshold, or a crew legality override — instead of Phase 1's "always ask a human."
 - **Priority score and option score formulas** (architecture doc section 8) computed for real, instead of Phase 1's rough guesses.
@@ -99,7 +99,7 @@ All 4 scenarios run reliably, two can be open simultaneously without interfering
 
 ### What we add
 - **MCP Gateway + 6 real MCP servers** (`weather-mcp`, `flightops-mcp`, `aodb-mcp`, `pss-mcp`, `crew-mcp`, `notify-mcp`), using `FastMCP`, one process each (or at least one importable package each) — this is the promotion of the Phase 1 "plain Python modules" into the real network-boundary tools the architecture doc describes, with the agent-to-tool permission matrix (doc section 10) actually enforced at the gateway instead of trusted by convention.
-- **Redis (Upstash free tier)** for: caching external API responses (60s TTL, so a quota outage doesn't break the demo) and as the event stream backing `/stream`, replacing the Phase 2 in-process SSE.
+- **Redis (Upstash free tier)** for caching external API responses (60s TTL, so a quota outage doesn't break the demo). The Streamlit frontend keeps doing auto-refresh polling exactly as in Phase 2 — it's just polling cheaper, cached endpoints now. (A real `/stream` SSE endpoint backed by Redis streams can still exist for architecture-doc parity, but nothing in this project's own frontend consumes it.)
 - **Real HITL approval tokens** — HMAC-signed, 15-minute TTL, bound to `option_id`, required by any `H`-tagged tool call at the gateway. Replaces Phase 1/2's boolean flag.
 - **LangGraph orchestrator** replacing the Phase 1 hand-written sequential function — same state machine, now an explicit graph with proper interrupt-on-HITL semantics, idempotency keys per event/action, and optimistic locking on the disruption row.
 - **What-if Simulator** (`POST /disruptions/{id}/simulate`) — dry-run mode that runs the Recovery agent with all `A`/`W` tools blocked, so a controller can preview an option without side effects.
@@ -122,7 +122,7 @@ Pulling the plug on one MCP server doesn't crash the app (breaker trips, that do
   - Telegram bot token → real chat delivery for the demo "passenger" channel.
   - OpenSky credentials (optional) → live aircraft positions layered onto the map, if you want it.
   - PSS, crew rosters, AODB gate data, and MEL/maintenance status **stay synthetic permanently** — there is no free real-world API for these, in any phase. The seeded dataset is the product's permanent "data layer," not a placeholder.
-- **Deployment**: Docker Compose for local parity, then Render/Fly.io for the API + MCP servers and Vercel for the Next.js frontend (all free tiers, per the architecture doc).
+- **Deployment**: Docker Compose for local parity, then Render/Fly.io for the API + MCP servers and **Streamlit Community Cloud** (free) for the frontend.
 - **Observability polish**: the Phase 3 trace panel becomes a proper dashboard view; add the layer-by-layer checks from architecture doc section 10 that weren't load-bearing earlier (PII masking in logs, rate limiting at the edge, CORS allowlist for the real deployed domain).
 - **Permission matrix tests** — automated checks that each agent can only reach the tools section 10's table says it can.
 - **Demo rehearsal pass**: pre-recorded fallback for `demo/inject` scenarios in case live weather/flight data is uncooperative during the actual demo, per the architecture doc's risk table.
@@ -139,7 +139,8 @@ The thing is reachable at a public URL, at least one external integration is liv
 | Scenarios | 1 (fog) | all 4 | all 4 | all 4, demo-polished |
 | Tool "servers" | plain Python functions | plain Python functions | real MCP servers + gateway | same, with real integrations behind them |
 | Orchestration | hand-written sequential function | same, generalized | LangGraph graph | same |
-| Realtime | polling | SSE | SSE over Redis streams | same |
+| Frontend | Streamlit (manual refresh) | Streamlit (auto-refresh) | Streamlit (auto-refresh, cached) | Streamlit (same, deployed) |
+| Realtime | manual refresh button | auto-refresh polling (`streamlit-autorefresh`) | same, against Redis-cached endpoints | same |
 | Cache | none | none | Redis | Redis |
 | Auth | none | JWT + RBAC | same | same + hardened |
 | HITL | boolean flag | risk-based auto/manual split | signed token, TTL, dry-run simulator | same |
@@ -147,4 +148,4 @@ The thing is reachable at a public URL, at least one external integration is liv
 | Flight schedule data | seeded (Faker) | seeded (Faker) | seeded (Faker) | real (AviationStack) if key exists, else seeded |
 | PSS / crew / AODB gates / MEL | seeded (Faker) — permanent | seeded — permanent | seeded — permanent | seeded — permanent |
 | Weather | real (Open-Meteo, METAR/TAF — no key) | real | real | real |
-| Deploy | local only | local only | local only | Render/Fly + Vercel |
+| Deploy | local only | local only | local only | Render/Fly (API + MCP) + Streamlit Community Cloud (frontend) |
