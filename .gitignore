@@ -1,0 +1,24 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Env / secrets
+.env
+.env.local
+
+# Local datastore (Phase 1 fallback when DATABASE_URL is unset)
+*.db
+*.db-journal
+data/
+
+# Cached reference data
+db/cache/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Editors / OS
+.DS_Store
+Thumbs.db
