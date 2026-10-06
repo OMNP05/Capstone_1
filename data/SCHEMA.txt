@@ -1,0 +1,52 @@
+airlines.dat
+1. airline_id              = Airline ID
+2. name                    = Airline Name
+3. alias                   = Airline Alias
+4. iata                    = IATA (International Air Transport Association) Code
+5. icao                    = ICAO (International Civil Aviation Organization) Code
+6. callsign                = Airline Radio Callsign
+7. country                 = Country
+8. active                  = Active Status (Y/N)
+
+
+airports.dat
+1. airport_id              = Airport ID
+2. name                    = Airport Name
+3. city                    = City
+4. country                 = Country
+5. iata                    = IATA (International Air Transport Association) Airport Code
+6. icao                    = ICAO (International Civil Aviation Organization) Airport Code
+7. latitude                = Latitude
+8. longitude               = Longitude
+9. altitude                = Altitude / Elevation (feet)
+10. timezone               = UTC (Coordinated Universal Time) Offset
+11. dst                    = Daylight Saving Time
+12. tz_database_timezone   = Time Zone Database Timezone
+13. type                   = Airport Type
+14. source                 = Data Source
+
+
+planes.dat
+1. name                    = Aircraft Name
+2. iata                    = IATA (International Air Transport Association) Aircraft Code
+3. icao                    = ICAO (International Civil Aviation Organization) Aircraft Code
+
+
+routes.dat
+1. airline                 = Airline Code
+2. airline_id              = Airline ID
+3. source_airport          = Source / Origin Airport Code
+4. source_airport_id       = Source / Origin Airport ID
+5. destination_airport     = Destination Airport Code
+6. destination_airport_id  = Destination Airport ID
+7. codeshare               = Codeshare Flight (Y/N)
+8. stops                   = Number of Stops
+9. equipment               = Aircraft Equipment / Aircraft Type Code
+
+Note:
+IATA = International Air Transport Association
+ICAO = International Civil Aviation Organization
+UTC  = Coordinated Universal Time
+Y    = Yes
+N    = No
+\N   = NULL / Missing Value
